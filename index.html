@@ -1,0 +1,282 @@
+<title>PacketLens</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0e1416;
+    --panel: #151d20;
+    --panel-border: #232d31;
+    --grid: #1d2629;
+    --text: #e7edef;
+    --muted: #7d8e93;
+    --signal: #57e5c9;
+    --signal-dim: rgba(87, 229, 201, 0.15);
+    --warn: #f5a623;
+    --crit: #f0553f;
+    --hero-grad-start: #121a1c;
+    --hero-grad-end: #0e1416;
+    --btn-text-on-signal: #0e1416;
+    --mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    --sans: 'Inter', -apple-system, sans-serif;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f7f7;
+    --panel: #ffffff;
+    --panel-border: #dde4e6;
+    --grid: #e7ecee;
+    --text: #16211f;
+    --muted: #5b6a6f;
+    --signal: #0d9488;
+    --signal-dim: rgba(13, 148, 136, 0.12);
+    --warn: #b45309;
+    --crit: #b91c1c;
+    --hero-grad-start: #ffffff;
+    --hero-grad-end: #eef2f3;
+    --btn-text-on-signal: #ffffff;
+  }
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 24px 60px; }
+
+  /* ---- Header / hero trace ---- */
+  .hero {
+    position: relative;
+    border: 1px solid var(--panel-border);
+    background: linear-gradient(180deg, var(--hero-grad-start) 0%, var(--hero-grad-end) 100%);
+    border-radius: 10px;
+    padding: 22px 24px 0;
+    overflow: hidden;
+    margin-bottom: 20px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  .brand-eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; color: var(--signal);
+    text-transform: uppercase; margin: 0 0 6px;
+  }
+  h1 {
+    font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: -0.01em;
+    margin: 0 0 4px; color: var(--text);
+  }
+  .subtitle { color: var(--muted); font-size: 13.5px; margin: 0; max-width: 46ch; }
+
+  .header-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  .theme-toggle {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px;
+    padding: 9px 12px; cursor: pointer; font-family: var(--mono); font-size: 12.5px;
+    color: var(--text); white-space: nowrap;
+  }
+  .theme-toggle:hover { border-color: var(--signal); }
+  .theme-toggle .icon { font-size: 14px; line-height: 1; }
+
+  .upload-box {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .upload-box input[type=file] { display: none; }
+  .upload-btn {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 600; letter-spacing: 0.03em;
+    color: var(--btn-text-on-signal); background: var(--signal); border: none; border-radius: 6px;
+    padding: 9px 14px; cursor: pointer; white-space: nowrap;
+  }
+  .upload-btn:hover { filter: brightness(1.08); }
+  .file-name { font-size: 12.5px; color: var(--muted); font-family: var(--mono); }
+
+  .trace-strip { height: 64px; margin: 18px -24px 0; position: relative; }
+  .trace-strip canvas { width: 100%; height: 100%; display: block; }
+
+  .summary-chips {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    padding: 14px 0 20px; margin-top: -2px;
+  }
+  .chip {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+
+  /* ---- Main tabs ---- */
+  .main-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--panel-border); }
+  .main-tab {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 600; letter-spacing: 0.02em;
+    color: var(--muted); background: transparent; border: none; cursor: pointer;
+    padding: 10px 16px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .main-tab:hover { color: var(--text); }
+  .main-tab.active { color: var(--signal); border-bottom-color: var(--signal); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ---- Grid of panels ---- */
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 16px 18px 18px;
+  }
+  .panel h2 {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 12px;
+  }
+  .span-12 { grid-column: span 12; }
+  .span-6 { grid-column: span 6; }
+  .span-4 { grid-column: span 4; }
+  @media (max-width: 860px) { .span-6, .span-4 { grid-column: span 12; } }
+
+  .chart-box { position: relative; height: 220px; }
+  .chart-box.tall { height: 260px; }
+
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 90px 20px; color: var(--muted);
+    border: 1px dashed var(--panel-border); border-radius: 10px; gap: 8px;
+  }
+  .empty-state .big { font-family: var(--mono); color: var(--text); font-size: 15px; }
+
+  /* ---- Anomaly list ---- */
+  .alert-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 10px 0; border-bottom: 1px solid var(--panel-border);
+    font-size: 13px;
+  }
+  .alert-row:last-child { border-bottom: none; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+  .dot.crit { background: var(--crit); box-shadow: 0 0 8px var(--crit); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  .alert-title { font-weight: 600; color: var(--text); }
+  .alert-detail { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-top: 2px; }
+  .no-alerts { color: var(--muted); font-size: 13px; padding: 10px 0; }
+
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.data-table th {
+    text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); font-weight: 500;
+    padding: 6px 8px; border-bottom: 1px solid var(--panel-border);
+  }
+  table.data-table td {
+    padding: 7px 8px; border-bottom: 1px solid #182022; font-family: var(--mono); color: var(--text);
+  }
+  table.data-table tr:last-child td { border-bottom: none; }
+  .bar-cell { position: relative; }
+  .bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--signal-dim); border-radius: 3px; }
+  .bar-cell span { position: relative; z-index: 1; }
+
+  /* ---- Packet details ---- */
+  .pkt-toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .pkt-search {
+    flex: 1; min-width: 180px; background: var(--bg); border: 1px solid var(--panel-border);
+    border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12.5px;
+    padding: 8px 10px; outline: none;
+  }
+  .pkt-search:focus { border-color: var(--signal); }
+  .pkt-select {
+    background: var(--bg); border: 1px solid var(--panel-border); border-radius: 6px;
+    color: var(--text); font-family: var(--mono); font-size: 12.5px; padding: 8px 10px; outline: none;
+  }
+  .pkt-count { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+
+  table.pkt-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--mono); }
+  table.pkt-table th {
+    text-align: left; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--panel-border);
+    position: sticky; top: 0; background: var(--panel);
+  }
+  table.pkt-table td { padding: 6px 8px; border-bottom: 1px solid #182022; color: var(--text); white-space: nowrap; }
+  table.pkt-table tbody tr { cursor: pointer; }
+  table.pkt-table tbody tr:hover { background: #1a2225; }
+  table.pkt-table tbody tr.expanded { background: #17282a; }
+  .proto-tag {
+    display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10.5px; font-weight: 600;
+  }
+  .proto-tag.TCP { background: var(--signal-dim); color: var(--signal); }
+  .proto-tag.UDP { background: rgba(77,143,219,0.18); color: #7db2f0; }
+  .proto-tag.ICMP { background: rgba(245,166,35,0.18); color: var(--warn); }
+  .proto-tag.other { background: rgba(125,142,147,0.18); color: var(--muted); }
+
+  .pkt-detail-row td { padding: 0; border-bottom: 1px solid var(--panel-border); }
+  .pkt-detail { padding: 14px 16px; background: #101718; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .pkt-detail-fields { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+  .pkt-detail-fields .layer-title {
+    color: var(--signal); font-weight: 600; font-size: 10.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; margin: 10px 0 2px;
+  }
+  .pkt-detail-fields .layer-title:first-child { margin-top: 0; }
+  .field-row { display: flex; gap: 8px; color: var(--muted); }
+  .field-row b { color: var(--text); font-weight: 500; min-width: 130px; }
+
+  .hex-dump { font-size: 11px; line-height: 1.6; color: var(--muted); overflow-x: auto; }
+  .hex-dump .hrow { white-space: pre; }
+  .hex-dump .hoff { color: #4d5b60; }
+  .hex-dump .hbytes { color: var(--text); }
+  .hex-dump .hascii { color: var(--muted); }
+
+  .pkt-pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+  .pkt-page-btn {
+    background: var(--bg); border: 1px solid var(--panel-border); color: var(--text);
+    font-family: var(--mono); font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .pkt-page-btn:hover:not(:disabled) { border-color: var(--signal); }
+  .pkt-page-btn:disabled { opacity: 0.35; cursor: default; }
+  .pkt-page-info { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+</style>
+
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem('packetlens-theme');
+      var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) { /* localStorage unavailable — default dark theme applies */ }
+  })();
+</script>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="hero-top">
+      <div>
+        <p class="brand-eyebrow">// packet capture analysis</p>
+        <h1>PacketLens</h1>
+        <p class="subtitle">Drop in a .pcap file and get live traffic composition, top talkers, bandwidth, and anomaly flags — parsed entirely in your browser. Nothing is uploaded anywhere.</p>
+      </div>
+      <div class="header-controls">
+        <button class="theme-toggle" id="themeToggle" type="button">
+          <span class="icon" id="themeIcon">☀️</span><span id="themeLabel">Light</span>
+        </button>
+        <div class="upload-box">
+          <label class="upload-btn" for="fileInput">Load .pcap file</label>
+          <input type="file" id="fileInput" accept=".pcap" />
+          <span class="file-name" id="fileName">no file loaded</span>
+        </div>
+      </div>
+    </div>
+    <div class="trace-strip"><canvas id="traceCanvas"></canvas></div>
+    <div class="summary-chips" id="summaryChips">
+      <span class="chip">packets: <b>—</b></span>
+      <span class="chip">bytes: <b>—</b></span>
+      <span class="chip">duration: <b>—</b></span>
+      <span class="chip">unique hosts: <b>—</b></span>
+    </div>
+  </div>
+
+  <div id="content">
+    <div class="empty-state">
+      <div class="big">Waiting for a capture</div>
+      <div>Load a classic-format .pcap file (libpcap / tcpdump / Wireshark export) to populate the dashboard.</div>
+    </div>
+  </div>
+</div>
+
+<script src="packetlens-engine.js"></script>
+<script src="packetlens-ui.js"></script>
