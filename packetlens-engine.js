@@ -87,23 +87,31 @@
     return base;
   }
 
-  // ---------- Global-header parsing + packet-record iteration ----------
+  // ---------- Format dispatcher ----------
   function parsePcap(buf) {
+    if (buf.byteLength < 24) throw new Error('File too small to be a valid capture.');
     const dv = new DataView(buf);
-    if (buf.byteLength < 24) throw new Error('File too small to be a valid pcap.');
+    const magicLE = dv.getUint32(0, true);
+    const magicBE = dv.getUint32(0, false);
 
+    if (magicLE === 0xa1b2c3d4 || magicBE === 0xa1b2c3d4 || magicLE === 0xa1b23c4d || magicBE === 0xa1b23c4d) {
+      return parseClassicPcap(buf, dv);
+    }
+    if (magicLE === 0x0a0d0d0a || magicBE === 0x0a0d0d0a) {
+      return parsePcapng(buf, dv);
+    }
+    throw new Error('Unrecognized file — not a classic .pcap or .pcapng capture.');
+  }
+
+  // ---------- Classic libpcap: global header + linear packet records ----------
+  function parseClassicPcap(buf, dv) {
     const magicLE = dv.getUint32(0, true);
     const magicBE = dv.getUint32(0, false);
     let little, nsec;
     if (magicLE === 0xa1b2c3d4) { little = true; nsec = false; }
     else if (magicBE === 0xa1b2c3d4) { little = false; nsec = false; }
     else if (magicLE === 0xa1b23c4d) { little = true; nsec = true; }
-    else if (magicBE === 0xa1b23c4d) { little = false; nsec = true; }
-    else if (magicLE === 0x0a0d0d0a || magicBE === 0x0a0d0d0a) {
-      throw new Error('This looks like a .pcapng file. Please export/convert to classic .pcap (libpcap) format — e.g. in Wireshark: File → Export Specified Packets → save as "Wireshark/tcpdump ... .pcap".');
-    } else {
-      throw new Error('Unrecognized file — not a classic .pcap capture.');
-    }
+    else { little = false; nsec = true; }
 
     let offset = 24; // global header size
     const packets = [];
@@ -119,6 +127,108 @@
       const ts = ts_sec + ts_frac / (nsec ? 1e9 : 1e6);
       packets.push(parsePacket(dv, offset, incl_len, ts, idx++));
       offset += incl_len;
+    }
+    return packets;
+  }
+
+  // ---------- pcapng: block-based container format ----------
+  // Blocks: Section Header Block (0x0A0D0D0A), Interface Description Block
+  // (0x00000001), Enhanced Packet Block (0x00000006), the older Packet Block
+  // (0x00000002, deprecated) and Simple Packet Block (0x00000003). Anything
+  // else (name resolution, interface stats, decryption secrets, custom
+  // blocks) is skipped using its own length field — we don't need to
+  // understand a block to skip past it.
+  function parsePcapng(buf, dv) {
+    let offset = 0;
+    let little = true;           // re-detected at each Section Header Block
+    let interfaces = [];         // per-section interface list: { tsresolDivisor }
+    const packets = [];
+    let idx = 0;
+
+    function readOptions_ifTsresol(bodyStart, bodyEnd, little) {
+      // Options are TLV: option code (2B) + option length (2B) + value
+      // (padded to a 4-byte boundary), terminated by opt_endofopt (code 0).
+      let o = bodyStart;
+      let divisor = 1e6; // default resolution: microseconds, per the pcapng spec
+      while (o + 4 <= bodyEnd) {
+        const code = dv.getUint16(o, little);
+        const len = dv.getUint16(o + 2, little);
+        if (code === 0 && len === 0) break; // opt_endofopt
+        if (code === 9 && len >= 1) {       // if_tsresol
+          const b = dv.getUint8(o + 4);
+          divisor = (b & 0x80) ? Math.pow(2, b & 0x7f) : Math.pow(10, b);
+        }
+        o += 4 + len + ((4 - (len % 4)) % 4); // advance past value + padding
+      }
+      return divisor;
+    }
+
+    while (offset + 12 <= buf.byteLength) {
+      // Block Type is read the same way regardless of byte order for the
+      // one block that matters here (0x0A0D0D0A is a byte-order palindrome),
+      // so we can always detect a new Section Header Block correctly.
+      const typeLE = dv.getUint32(offset, true);
+
+      if (typeLE === 0x0a0d0d0a) {
+        // Section Header Block — (re)establish endianness for this section
+        // by locating the byte-order magic at a fixed offset within the body.
+        const bomLE = dv.getUint32(offset + 8, true);
+        const bomBE = dv.getUint32(offset + 8, false);
+        if (bomLE === 0x1a2b3c4d) little = true;
+        else if (bomBE === 0x1a2b3c4d) little = false;
+        else throw new Error('Malformed pcapng section header (bad byte-order magic).');
+        interfaces = []; // a new section restarts interface numbering
+      }
+
+      const blockType = dv.getUint32(offset, little);
+      const blockLen = dv.getUint32(offset + 4, little);
+      if (blockLen < 12 || offset + blockLen > buf.byteLength) break;
+      const bodyStart = offset + 8;
+      const bodyEnd = offset + blockLen - 4;
+
+      if (blockType === 0x00000001) {
+        // Interface Description Block: LinkType(2) Reserved(2) SnapLen(4) Options
+        const tsresolDivisor = readOptions_ifTsresol(bodyStart + 8, bodyEnd, little);
+        interfaces.push({ tsresolDivisor });
+      } else if (blockType === 0x00000006) {
+        // Enhanced Packet Block: IfaceID(4) TsHigh(4) TsLow(4) CapLen(4) OrigLen(4) Data...
+        const ifaceId = dv.getUint32(bodyStart, little);
+        const tsHigh = dv.getUint32(bodyStart + 4, little);
+        const tsLow = dv.getUint32(bodyStart + 8, little);
+        const capLen = dv.getUint32(bodyStart + 12, little);
+        const divisor = (interfaces[ifaceId] && interfaces[ifaceId].tsresolDivisor) || 1e6;
+        // Combine the two 32-bit halves as seconds directly (rather than
+        // forming the full 64-bit integer first) to avoid precision loss —
+        // nanosecond-resolution raw counters exceed Number.MAX_SAFE_INTEGER.
+        const ts = tsHigh * (4294967296 / divisor) + tsLow / divisor;
+        const frameStart = bodyStart + 20;
+        if (frameStart + capLen <= bodyEnd + 4) {
+          packets.push(parsePacket(dv, frameStart, capLen, ts, idx++));
+        }
+      } else if (blockType === 0x00000002) {
+        // Packet Block (deprecated): IfaceID(2) Drops(2) TsHigh(4) TsLow(4) CapLen(4) OrigLen(4) Data...
+        const ifaceId = dv.getUint16(bodyStart, little);
+        const tsHigh = dv.getUint32(bodyStart + 4, little);
+        const tsLow = dv.getUint32(bodyStart + 8, little);
+        const capLen = dv.getUint32(bodyStart + 12, little);
+        const divisor = (interfaces[ifaceId] && interfaces[ifaceId].tsresolDivisor) || 1e6;
+        const ts = tsHigh * (4294967296 / divisor) + tsLow / divisor;
+        const frameStart = bodyStart + 20;
+        if (frameStart + capLen <= bodyEnd + 4) {
+          packets.push(parsePacket(dv, frameStart, capLen, ts, idx++));
+        }
+      } else if (blockType === 0x00000003) {
+        // Simple Packet Block: OrigLen(4) Data... — no timestamp or interface
+        // recorded, so we synthesize a monotonically increasing one.
+        const capLen = Math.min(dv.getUint32(bodyStart, little), bodyEnd - (bodyStart + 4));
+        const frameStart = bodyStart + 4;
+        packets.push(parsePacket(dv, frameStart, capLen, idx * 1e-6, idx));
+        idx++;
+      }
+      // Any other block type (name resolution, interface stats, decryption
+      // secrets, custom blocks, ...) is simply skipped.
+
+      offset += blockLen;
     }
     return packets;
   }
@@ -228,5 +338,5 @@
     };
   }
 
-  return { parsePcap, parsePacket, analyze, tcpFlagsToStr, ipToStr, macToStr };
+  return { parsePcap, parseClassicPcap, parsePcapng, parsePacket, analyze, tcpFlagsToStr, ipToStr, macToStr };
 });
