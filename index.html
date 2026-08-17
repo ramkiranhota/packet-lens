@@ -246,17 +246,17 @@
   <div class="hero">
     <div class="hero-top">
       <div>
-        <p class="brand-eyebrow">packet capture analysis</p>
+        <p class="brand-eyebrow">Packet Capture Analysis</p>
         <h1>Packet-Lens</h1>
-        <p class="subtitle">Drop in a .pcap file and get live traffic composition, top talkers, bandwidth, and anomaly flags — parsed entirely in your browser. Nothing is uploaded anywhere.</p>
+        <p class="subtitle">Drop in a .pcap or .pcapng file and get live traffic composition, top talkers, bandwidth, and anomaly flags — parsed entirely in your browser. Nothing is uploaded anywhere.</p>
       </div>
       <div class="header-controls">
         <button class="theme-toggle" id="themeToggle" type="button">
           <span class="icon" id="themeIcon">☀️</span><span id="themeLabel">Light</span>
         </button>
         <div class="upload-box">
-          <label class="upload-btn" for="fileInput">Load .pcap file</label>
-          <input type="file" id="fileInput" accept=".pcap" />
+          <label class="upload-btn" for="fileInput">Load .pcap / .pcapng file</label>
+          <input type="file" id="fileInput" accept=".pcap,.pcapng" />
           <span class="file-name" id="fileName">no file loaded</span>
         </div>
       </div>
@@ -273,7 +273,7 @@
   <div id="content">
     <div class="empty-state">
       <div class="big">Waiting for a capture</div>
-      <div>Load a classic-format .pcap file (libpcap / tcpdump / Wireshark export) to populate the dashboard.</div>
+      <div>Load a .pcap or .pcapng file (libpcap / tcpdump / Wireshark export) to populate the dashboard.</div>
     </div>
   </div>
 </div>
